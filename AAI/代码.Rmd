@@ -1,0 +1,1417 @@
+---
+title: ""
+author: "TTTX"
+date: "2025-01-08"
+output: html_document
+---
+```{r}
+rm(list = ls())
+```
+
+
+#工作目录设置
+```{r}
+#数据处理结果保存的目录
+GEO_result_folder <- "C:/Users/86177/Desktop/我的课题/BCAT1---肝癌/运行/data/data_result"
+```
+
+```{r}
+#分析结果保存的目录
+PCA_result_folder <- "C:/Users/86177/Desktop/我的课题/BCAT1---肝癌/运行/result/PCA"
+DEG_result_folder <- "C:/Users/86177/Desktop/我的课题/BCAT1---肝癌/运行/result/DEG"
+survival_result_folder <- "C:/Users/86177/Desktop/我的课题/BCAT1---肝癌/运行/result/survival_curve"
+Correlation_result_folder <- "C:/Users/86177/Desktop/我的课题/BCAT1---肝癌/运行/result/Correlation"
+machine_result_folder <- "C:/Users/86177/Desktop/我的课题/BCAT1---肝癌/运行/result/machine"
+string_result_folder <- "C:/Users/86177/Desktop/我的课题/马兜铃相关/肝癌/string"
+```
+
+#导入分析结果
+```{r}
+setwd(GEO_result_folder)
+load("HCC_matrix_before.rda")
+load("HCC_matrix_after.rda")
+load("HCC_clinic.rda")
+```
+#PCA
+```{r 去除批次前 按照GSE}
+setwd(PCA_result_folder)
+Group <- HCC_clinical_all$source
+# 将batch变量转换为因子，其中包含所有唯一的值作为水平
+Group <- factor(Group)
+
+dat=as.data.frame(t(HCC_matrix_all_before))
+library(FactoMineR)
+library(factoextra) 
+dat.pca <- PCA(dat, graph = FALSE)
+pca_plot <- fviz_pca_ind(dat.pca,
+                         geom.ind = "point", # show points only (nbut not "text")
+                         col.ind = Group, # color by groups
+                         palette = c("#00AFBB", "#E7B800","#E87800"),
+                         addEllipses = TRUE, # Concentration ellipses
+                         legend.title = "Groups"
+)
+pca_plot
+ggsave(plot = pca_plot,filename = "HCC_GSE_PCA_before.pdf")
+```
+
+```{r 去除批次后 按照GSE}
+setwd(PCA_result_folder)
+Group <- HCC_clinical_all$source
+# 将batch变量转换为因子，其中包含所有唯一的值作为水平
+Group <- factor(Group)
+
+dat=as.data.frame(t(HCC_combat_matrix))
+library(FactoMineR)
+library(factoextra) 
+dat.pca <- PCA(dat, graph = FALSE)
+pca_plot <- fviz_pca_ind(dat.pca,
+                         geom.ind = "point", # show points only (nbut not "text")
+                         col.ind = Group, # color by groups
+                         palette = c("#00AFBB", "#E7B800","#E87800"),
+                         addEllipses = TRUE, # Concentration ellipses
+                         legend.title = "Groups"
+)
+pca_plot
+ggsave(plot = pca_plot,filename = "HCC_GSE_PCA_after.pdf")
+
+
+```
+
+```{r 去除批次后 按照正常和疾病}
+setwd(PCA_result_folder)
+Group <- HCC_clinical_all$group
+# 将batch变量转换为因子，其中包含所有唯一的值作为水平
+Group <- factor(Group)
+
+dat=as.data.frame(t(HCC_combat_matrix))
+library(FactoMineR)
+library(factoextra) 
+dat.pca <- PCA(dat, graph = FALSE)
+pca_plot <- fviz_pca_ind(dat.pca,
+                         geom.ind = "point", # show points only (nbut not "text")
+                         col.ind = Group, # color by groups
+                         palette = c("#00AFBB", "#E7B800"),
+                         addEllipses = TRUE, # Concentration ellipses
+                         legend.title = "Groups"
+)
+pca_plot
+ggsave(plot = pca_plot,filename = "HCC_con_PCA.pdf")
+```
+
+#差异分析
+```{r}
+setwd(DEG_result_folder)
+###limma####
+#1)分组 2)矩阵 
+#检查行名列名是否一致
+identical(rownames(HCC_clinical_all),colnames(HCC_combat_matrix))
+#定义了一个顺序
+group_list <- factor(HCC_clinical_all$group,levels = c("Control","HCC"))
+#加载limma包
+library(limma)
+design <- model.matrix(~group_list)
+### 比较矩阵命名
+design
+### 2.线性模型拟合
+fit <- lmFit(HCC_combat_matrix,design)
+### 3.贝叶斯检验
+fit2 <- eBayes(fit)
+deg <- topTable(fit2, coef = 2, number = Inf)
+
+DEG = na.omit(deg) #获得差异表达基因differently expressed genes
+#进行注释 fold change，设置logfc大于1的域值
+logFC_cutoff <- 1
+#定义差异表达基因，根据p和logfc进行筛选
+type1 = (DEG$P.Value < 0.05)&(DEG$logFC < -logFC_cutoff)
+type2 = (DEG$P.Value < 0.05)&(DEG$logFC > logFC_cutoff)
+#DOWN低表达基因，UP高表达基因，not代表无意义基因
+DEG$change = ifelse(type1,"DOWN",ifelse(type2,"UP","NOT"))
+#对注释后的文件保存
+write.csv(DEG, file = "HCC_DEG.csv")
+table(DEG$change)
+```
+
+#差异分析可视化（火山图，热图和单个基因箱线图）
+```{r}
+##单个基因散点图可视化-这里选择了ARG1基因（通过logfc选择你想要做的基因）
+library(tidyverse)
+setwd(DEG_result_folder)
+exps <- HCC_combat_matrix %>% t() %>% as.data.frame() %>% dplyr::select("BCAT1")
+identical(rownames(exps),rownames(HCC_clinical_all))
+rtbox <- cbind(exps,HCC_clinical_all)
+
+###box####
+library(ggpubr)
+
+ggboxplot(rtbox, 
+          x="group", 
+          y="BCAT1")
+pdf(file="BCAT1_不加点_箱线图.pdf", height=8, width=8)
+ggboxplot(rtbox, 
+          x="group", 
+          y="BCAT1", 
+          fill = "group")
+dev.off()
+pdf(file="BCAT1_加点_箱线图.pdf", height=8, width=8)
+ggboxplot(rtbox, x="group", y="BCAT1", fill = "group", 
+          ylab="BCAT1 gene expression",
+          xlab="",
+          legend.title="",
+          palette = c("#377EB8","#E41A1C"),
+          width=0.4, add = "jitter")+stat_compare_means(method="wilcox.test")
+dev.off()
+###火山图#####
+library(ggplot2)
+library(cowplot)
+
+ggplot(data = DEG, 
+       aes(x = logFC, 
+           y = -log10(P.Value))) +
+  geom_point(alpha=0.5, size=4.5, 
+             aes(color=change)) +
+  xlab("log2FC")+
+  ylab("-log10(P.Value)")+
+  geom_vline(xintercept=c(-1,1) ,lty=5,col="black",lwd=0.8) +
+  geom_hline(yintercept = -log10(0.05),lty=4,col="black",lwd=0.8)
+pdf(file="火山图.pdf", height=8, width=8)
+ggplot(data = DEG, 
+       aes(x = logFC, 
+           y = -log10(P.Value))) +
+  geom_point(alpha=0.5, size=4.5, 
+             aes(color=change)) +
+  ylab("-log10(P.Value)")+
+  scale_color_manual(values=c("#0072B5CC", "grey","red"))+
+  geom_vline(xintercept=c(-1,1) ,lty=5,col="black",lwd=0.8) +
+  geom_hline(yintercept = -log10(0.05),lty=4,col="black",lwd=0.8) +
+  theme_half_open()
+dev.off()
+###火山图美化版
+library(openxlsx)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+
+p_val <- 0.05
+logfc_low <- -1
+logfc_high <- 1
+bullcol <- c("#39489f","#39bbec","#f9ed36","#f38466","#b81f25")
+
+# 核心基因数据，确保包含了gene列和pvalue_log列
+core_gene_data <- DEG %>%
+  mutate(pvalue_log = -log10(P.Value)) %>%
+  rownames_to_column(var = "gene") # 将行名转换为列
+
+# 找出logFC正值最大的前10个基因
+top_positive_genes <- core_gene_data %>%
+  filter(logFC > 0) %>%
+  arrange(desc(logFC)) %>%
+  slice_head(n = 10)
+
+# 找出logFC负值最小的前10个基因
+top_negative_genes <- core_gene_data %>%
+  filter(logFC < 0) %>%
+  arrange(logFC) %>%
+  slice_head(n = 10)
+
+# 合并两个基因列表
+top_genes <- bind_rows(top_positive_genes, top_negative_genes)
+
+# 火山图
+pdf(file="火山图_美化版.pdf", height=8, width=8)
+p <- ggplot(core_gene_data, aes(x = logFC, y = -log10(P.Value))) +
+  geom_hline(yintercept = -log10(p_val), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = c(logfc_low, logfc_high), linetype = "dashed", color = "black") +
+  geom_point(aes(size = pvalue_log, color = pvalue_log), alpha = 0.7) +
+  scale_color_gradientn(colors = bullcol) +
+  scale_size_continuous(range = c(1, 3)) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid = element_blank(), legend.position = 'right', legend.justification = c(0, 1)) +
+  guides(color = guide_colorbar(title = "-Log10(pvalue)", barheight = 8, barwidth = 1), size = guide_legend(title = "pvalue_log")) +
+  xlab("Log2FC") + ylab("-Log10(pvalue)") +
+  # 只在图上展示logFC绝对值最大的前20个基因的名称
+  geom_text_repel(data = top_genes, aes(label = gene, color = pvalue_log), size = 3.5, max.overlaps = 20, force = 10, box.padding = unit(0.5, "lines"), nudge_x = 0.5, nudge_y = 1)
+p
+dev.off()
+###热图#####
+library(pheatmap)
+identical(rownames(HCC_clinical_all),colnames(HCC_combat_matrix))
+#读取差异表达基因的结果
+DEG <- read.csv("HCC_DEG.csv",row.names = 1)
+table(DEG$change)
+#排除没有差异的基因
+GEEK <- rownames(DEG)[DEG$change !="NOT"]
+exp_diff <- HCC_combat_matrix[GEEK,]
+range(exp_diff)
+#显示行名
+pheatmap(exp_diff,
+         annotation_col=HCC_clinical_all,
+         cluster_cols = F,
+         show_colnames = F,
+         show_rownames = T,
+         border_color = NA)
+#不显示行名
+pheatmap(exp_diff,
+         annotation_col=HCC_clinical_all,
+         cluster_cols = F,
+         show_colnames = F,
+         show_rownames = F,
+         border_color = NA)
+
+#2 展示特定
+library(tidyverse)
+#只保留差异记忆
+GEEK =  DEG[DEG$change !="NOT",]
+#选择logfc最大的和最少的35个
+up1 <- GEEK %>% top_n(25,logFC)
+dw1 <- GEEK %>% top_n(-25,logFC)
+tt1 <-c(rownames(up1),rownames(dw1))
+exp_diff2 <- HCC_combat_matrix[tt1,]
+pdf(file="热图1.pdf", height=8, width=8)
+pheatmap(exp_diff2,
+         annotation_col=HCC_clinical_all,
+         cluster_cols = F,
+         cluster_rows = F,
+         show_colnames = F,
+         show_rownames = T,
+         border_color = NA)
+dev.off()
+pdf(file="热图2.pdf", height=8, width=8)
+pheatmap(exp_diff2,
+         annotation_col=HCC_clinical_all,
+         color = colorRampPalette((c("blue","white","red")))(100),
+         cluster_cols = F,
+         cluster_rows = F,
+         show_colnames = F,
+         show_rownames = T,
+         border_color = NA)
+dev.off()
+```
+
+```{r veen图绘制}
+library(ggvenn)
+library(TheBestColors)
+Best100(23)
+# 获取目录下txt结尾的文件
+files <- list.files(pattern = "\\.txt$")  
+geneList <- list()
+
+# 读取所有txt文件中的基因信息，保存到geneList
+for (inputFile in files) {
+    rt <- read.table(inputFile, header = F, sep = "\t", check.names = F)  # 读取输入文件
+    geneNames <- unlist(strsplit(as.vector(rt[, 1]), " "))               # 提取基因名称
+    geneNames <- gsub("^ | $", "", geneNames)                            # 去掉基因首尾的空格
+    uniqGene <- unique(geneNames)                                        # 基因取unique
+    header <- unlist(strsplit(inputFile, "\\."))                         # 提取文件名作为列表名
+    geneList[[header[1]]] <- uniqGene
+}
+
+# 绘制Venn图
+pdf(file = "venn.pdf", width = 6, height = 6)
+ggvenn(geneList, show_percentage = TRUE,
+       stroke_color = "white", stroke_size = 0.5,
+       fill_color = c("#FED439", "#1A9993", "#F05C3B"),
+       set_name_color = c("#FED439", "#1A9993", "#F05C3B"),
+       set_name_size = 6, text_size = 4.5)
+dev.off()
+```
+
+#同时展示多组差异基因可视化
+```{r}
+###多组箱线图展示#####
+library(ggpubr)
+library(tidyverse)
+library(rstatix)
+library(tidyr)  
+all_gene <- c("ESR1", "PDGFRA", "AURKA", "CYP2A6", "CYP2E1", "CKS1B", "HMMR", "TPX2", "MME", "EGR1", "CYP1A2", "CYP3A4", "FBP1", "SLC10A1", "PLG", "CYP2C19", "HPD", "ACSL4")
+exps <- HCC_combat_matrix %>% t() %>% as.data.frame() %>% dplyr::select(all_gene)
+identical(rownames(exps),rownames(HCC_clinical_all))
+rtbox <- cbind(exps,HCC_clinical_all)
+# 将数据转换为长格式  
+rtbox_long <- pivot_longer(rtbox,   
+                           cols = all_gene,   
+                           names_to = "gene",   
+                           values_to = "expression")  
+
+# 绘制箱线图  
+library(TheBestColors)
+#颜色定义
+map <- Best100(7)#调用第七组
+
+group1Col<-map[2]#调用第2个颜色
+group2Col<-map[6]#调用第4个颜色
+pdf(file="多组基因箱线图.pdf", height=8, width=16)
+p <- ggboxplot(
+  rtbox_long, x = "gene", y = "expression", 
+  color = "group", palette = c(group1Col, group2Col)
+)+ theme_bw() + theme(panel.border = element_rect(fill=NA), legend.position = "top")
+
+stat.test <- rtbox_long %>%
+  group_by(gene) %>%
+  pairwise_wilcox_test(expression ~ group, p.adjust.method = "BH")
+
+stat.test <- stat.test %>%
+  add_xy_position(x = "gene", dodge = 0.8)     # 标记一下坐标位置
+# 可视化
+p + stat_pvalue_manual(
+  stat.test,  label = "p", tip.length = 0
+) + # 将p修改为p.adj.signif即可转换为显示显著性的标记符号
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) # 增加y轴10%的高度
+# 保存图形  
+dev.off()
+```
+
+#3种机器学习
+```{r}
+library(tidyverse)
+#将那18个基因拿出来
+genes <- c("ESR1", "PDGFRA", "AURKA", "CYP2A6", "CYP2E1", "CKS1B", "HMMR", "TPX2", "MME", "EGR1", "CYP1A2", "CYP3A4", "FBP1", "SLC10A1", "PLG", "CYP2C19", "HPD", "ACSL4")
+
+HCC_combat_matrix <- HCC_combat_matrix %>% t() %>% as.data.frame() %>% 
+  select(genes) #选择你想要做的预后相关的基因
+##### LASSO ####
+set.seed(123)            # 设置种子
+library(glmnet)                   # 加载包
+
+# 构建模型
+x = as.matrix(HCC_combat_matrix) # 差异基因表达量
+y <-HCC_clinical_all$group # 样品的类型，转换为数值型因子
+fit = glmnet(x, y, family = "binomial", alpha = 1) # 构建模型
+cvfit = cv.glmnet(x, y, family = "binomial", alpha = 1, type.measure = 'deviance', nfolds = 10) # 交叉验证
+pdf(file = "cvfit.pdf", width = 6, height = 5.5)
+plot(cvfit)
+dev.off()
+
+# 输出筛选出来的特征基因
+coef = coef(fit, s = cvfit$lambda.min)
+index = which(coef != 0)
+lassoGene = row.names(coef)[index]
+lassoGene = lassoGene[-1]
+write.table(lassoGene, file = "LASSO.gene.txt", sep = "\t", quote = F, row.names = F, col.names = F)
+
+##### SVM ####
+library(e1071)
+library(kernlab)
+library(caret)
+set.seed(123)
+# 读取输入文件
+group = HCC_clinical_all$group # 提取样品类型
+
+# 确保目标变量是因子类型
+y = as.factor(group)
+
+# 设置 RFE 控制参数
+control <- rfeControl(functions = caretFuncs$svmFuncs, method = "cv")
+
+#SVM-RFE分析---耗时较久
+Profile <- rfe(x = HCC_combat_matrix,
+               y = y,
+               sizes = c(2, 4, 6, 8, seq(10, 40, by = 3)),
+               rfeControl = control,
+               method = "svmRadial")
+
+# 绘制图形
+pdf(file = "SVM-RFE.pdf", width = 6, height = 5.5)
+par(las = 1)
+x = Profile$results$Variables
+y = Profile$results$RMSE
+
+# 绘制散点图和连线
+plot(x, y, xlab = "Variables", ylab = "RMSE (Cross-Validation)", col = "darkgreen")
+lines(x, y, col = "darkgreen")
+
+# 标注交叉验证误差最小的点
+wmin = which.min(y)
+if (length(wmin) > 0 && !is.na(wmin)) {  # 确保 wmin 是有效的
+  wmin.x = x[wmin]
+  wmin.y = y[wmin]
+  
+  # 确保 wmin.x 和 wmin.y 不是 NA 或 NULL
+  if (!is.na(wmin.x) && !is.na(wmin.y)) {
+    points(wmin.x, wmin.y, col = "blue", pch = 16)
+    text(wmin.x, wmin.y, paste0('N=', wmin.x), pos = 2, col = 2)
+  } else {
+    warning("wmin.x 或 wmin.y 是 NA 或 NULL，无法标注点。")
+  }
+} else {
+  warning("没有找到最小的 RMSE 值，无法标注点。")
+}
+
+dev.off()
+
+# 输出选择的基因
+featureGenes = Profile$optVariables
+write.table(file = "SVM-RFE.gene.txt", featureGenes, sep = "\t", quote = F, row.names = F, col.names = F)
+
+##### Random forest ####
+set.seed(12345)
+library(randomForest)
+library(ggplot2)
+# 获取样品的分组信息(对照组和实验组)
+group = HCC_clinical_all$group
+data = cbind(group, HCC_combat_matrix)
+data <- data.frame(group = group, HCC_combat_matrix)
+# 随机森林树
+options(expressions = 5e5)
+HCC_combat_matrix = randomForest(as.factor(group) ~ ., data = data, ntree = 500)
+pdf(file = "forest.pdf", width = 6, height = 6)
+plot(HCC_combat_matrix, main = "Random forest", lwd = 2)
+dev.off()
+
+# 找出误差最小的点
+optionTrees = which.min(HCC_combat_matrix$err.rate[, 1])
+optionTrees
+
+# 获取基因重要性的评分
+rf2 = randomForest(as.factor(group) ~ ., data = data, ntree = optionTrees)
+importance = importance(x = rf2)
+
+# 筛选疾病的特征基因
+rfGenes = importance[order(importance[, "MeanDecreaseGini"], decreasing = TRUE), ]
+rfGenes = names(rfGenes[rfGenes > 4])        # 挑选重要性评分大于4的基因
+#rfGenes = rfGenes[1:10]# 挑选重要性评分最高的5个基因
+write.table(rfGenes, file = "RF.gene.txt", sep = "\t", quote = F, col.names = F, row.names = F)
+```
+
+```{r veen图绘制}
+setwd("C:/Users/86177/Desktop/我的课题/马兜铃相关/肝癌/机器学习")
+library(ggvenn)
+files=list.files(pattern="*.txt$")     #获取目录下txt结尾的文件
+geneList=list()
+
+#读取所有txt文件中的基因信息，保存到geneList
+for(inputFile in files){
+	if(inputFile=="interGenes.txt"){next}
+    rt=read.table(inputFile, header=F, sep="\t", check.names=F)      #读取输入文件
+    geneNames=unlist(strsplit(as.vector(rt[,1]), " "))       #提取基因名称
+    geneNames=gsub("^ | $","",geneNames)     #去掉基因首尾的空格
+    uniqGene=unique(geneNames)                 #基因取unique
+    header=unlist(strsplit(inputFile,"\\."))
+    geneList[[header[1]]]=uniqGene
+}
+#绘制venn图
+pdf(file="venn.pdf", width=6, height=6)
+ggvenn(geneList, show_percentage = T,
+  stroke_color = "white", stroke_size = 0.5,
+  fill_color = c("#E41A1C","#1E90FF","#FF8C00"),
+  set_name_color =c("#E41A1C","#1E90FF","#FF8C00"),
+  set_name_size=6, text_size=4.5)
+dev.off()
+```
+
+```{r roc曲线验证与shap分析}
+setwd("C:/Users/86177/Desktop/我的课题/马兜铃相关/肝癌/机器学习")
+library(caret)
+library(DALEX)
+library(ggplot2)
+library(randomForest)
+library(kernlab)
+library(kernelshap)
+library(pROC)
+library(shapviz)
+library(xgboost)
+library(klaR)
+#names(getModelInfo())
+
+set.seed(12345)      #设置种子
+#读取表达数据文件
+data=HCC_combat_matrix
+
+#读取基因列表文件,提取交集特征基因的表达量
+geneRT=rt#rt为你筛选出来的核心基因的名字
+data=data[as.vector(geneRT[,1]),]
+row.names(data)=gsub("-", "_", row.names(data))
+
+#获取样品分组信息(对照组和实验组)
+data=t(data)
+group=HCC_clinical_all$group
+data=as.data.frame(data)
+data$Type=group
+
+#对数据进行分组(训练组和测试组)
+inTrain<-createDataPartition(y=data$Type, p=0.7, list=F)
+train<-data[inTrain,]
+test<-data[-inTrain,]
+
+#提取用于预测的数据
+yTestClass=test$Type
+yTest=ifelse(yTestClass=="Control", 0, 1)
+test<-test[,-ncol(test)]
+
+#读取机器学习方法的文件
+control=trainControl(method="repeatedcv", number=5, savePredictions=TRUE)
+methodRT <- read.table("refer.methodLists.txt", header=T, sep="\t", check.names=F)
+
+#对机器学习方法进行循环,构建机器学习的模型
+modelList=list()
+AUC=c()
+library(TheBestColors)
+raindow <- Best100(23)
+ROCcolor=Best100(23)[1:nrow(methodRT)]
+for(i in 1:nrow(methodRT)){
+	name=methodRT[i,"Name"]
+	method=methodRT[i,"Method"]
+	#构建机器学习的模型
+	model=train(Type ~ ., data = train, method=method, trControl = control)
+	if(name=="SVM"){
+		model=train(Type ~ ., data = train, method=method, prob.model=TRUE, trControl = control)
+	}
+	#得到每个样品预测的结果
+	pred=predict(model, newdata=test, type="prob")
+	#绘制ROC曲线
+	roc=roc(yTest, as.numeric(pred[,2]))
+	AUC=c(AUC, paste0(name, ': ', sprintf("%.03f",roc$auc)))
+	modelList[[method]]=as.numeric(roc$auc)
+	if(i==1){
+		pdf(file="ROC.pdf", width=5.5, height=5)
+		plot(roc, print.auc=F, legacy.axes=T, main="", col=ROCcolor[i], lwd=3)
+	}else{
+		plot(roc, print.auc=F, legacy.axes=T, main="", col=ROCcolor[i], lwd=3, add=T)
+	}
+}
+legend('bottomright', AUC, col=ROCcolor, lwd=3, bty = 'n', cex=0.9)
+dev.off()
+
+#根据ROC曲线下的面积获取最优的模型
+aucValue=unlist(modelList)
+bestMethod=names(which(aucValue==max(aucValue)))
+bestMethod
+train$Type=ifelse(train$Type=="Control", 0, 1)
+model=train(Type ~., data = train, method = bestMethod, trControl=control)
+
+#计算SHAP值
+fit=permshap(model, train[,-ncol(train)])
+#fit=kernelshap(model, train[,-ncol(train)])      #基因比较多的时候运行这命令
+shp <- shapviz(fit, X_pred = train[,-ncol(train)], X=train[,-ncol(train)], interactions=T)
+#根据贡献程度对基因进行排序
+important=sort(colMeans(abs(shp$S)), decreasing=T)
+showVars=names(important)
+
+#绘制柱状图
+pdf(file="barplot.pdf", width=6, height=6)
+sv_importance(shp, kind="bar", show_numbers=TRUE)+theme_bw()
+dev.off()
+
+#绘制蜂群图
+pdf(file="bee.pdf", width=7, height=6)
+sv_importance(shp, kind = "bee", show_numbers=TRUE)+theme_bw()
+dev.off()
+
+#散点图(依赖图)
+pdf(file="dependence.pdf", width=9, height=6)
+sv_dependence(shp, v = showVars)+theme_bw()
+dev.off()
+
+#瀑布图
+pdf(file="waterfall.pdf", width=7, height=5)
+sv_waterfall(shp, row_id = 1)
+dev.off()
+
+#单样品力图
+pdf(file="force.pdf", width=9, height=5)
+sv_force(shp, row_id = 1)
+dev.off()
+```
+
+#GO和KEGG
+```{r}
+## GO富集 ####
+library(tidyverse)
+library(org.Hs.eg.db)#人的基因org.Hs.eg.db；鼠的基因org.Mm.eg.db
+library(clusterProfiler)
+
+#产生ENTREZID（富集分析用）
+deg <- read.table("inter_gene.txt",header = T)
+genelist <- bitr(deg[,1], fromType="SYMBOL",
+                 toType="ENTREZID", OrgDb='org.Hs.eg.db')
+deg <- inner_join(deg,genelist,by=c("gene"="SYMBOL"))
+go_enrich<-clusterProfiler::enrichGO(gene = deg$ENTREZID,
+                    ont = 'all',#可选'BP','CC','MF' or 'all'
+                    keyType = "ENTREZID",
+                    OrgDb = org.Hs.eg.db,
+                    pAdjustMethod = "BH",#p值矫正方法
+                    minGSSize = 1,
+                    pvalueCutoff = 0.05,
+                    qvalueCutoff = 0.05,
+                    readable = TRUE)
+ #将RNTREZ转换为Symbol
+ go_enrich<-DOSE::setReadable(go_enrich,
+                             OrgDb = org.Hs.eg.db,
+                             keyType = 'ENTREZID')
+#去除冗余的GO term
+go_geo<- simplify(go_enrich, cutoff=0.7, by="p.adjust",
+                 select_fun=min)
+#提取goG富集结果表格 
+go_result<-go_geo@result
+
+go_result <- separate(data=go_result, 
+                      col=GeneRatio,
+                      into = c("GR1", "GR2"), 
+                      sep = "/")
+#go_result <- separate(data=go_result, 
+#                      col=BgRatio, 
+#                      into = c("BR#1", "BR2"), 
+#                      sep = "/")
+go_result <- mutate(go_result, 
+                    GeneRatio = (as.numeric(GR1)/as.numeric(GR2)))
+
+# 筛选每个类别的前五位
+# 从 go_result 提取 MF、BP 和 CC 的前5个条目  
+colnames(go_result)[1] <- "ONTOLOGY"
+go_mf <- go_result %>% filter(ONTOLOGY == "MF") %>% slice_head(n = 5)  
+go_bp <- go_result %>% filter(ONTOLOGY == "BP") %>% slice_head(n = 5)  
+go_cc <- go_result %>% filter(ONTOLOGY == "CC") %>% slice_head(n = 5)  
+
+# 组合成一个数据框，按需要的顺序  
+go_combined <- bind_rows(go_mf, go_bp, go_cc)  
+
+# 添加类型列（type），用于区分正负方向
+go_combined <- go_combined %>%
+  mutate(type = case_when(
+    ONTOLOGY == "MF" ~ 1,  # MF 为正方向
+    ONTOLOGY == "BP" ~ 1,  # BP 为正方向
+    ONTOLOGY == "CC" ~ -1  # CC 为负方向
+  ))
+
+# 定义颜色
+two_colors <- c("#E27371", "#5D82A7")  # 用于正负方向的颜色
+########GO可视化1#######
+# 绘制带基因名的 Lollipop 图
+pdf(file = "GO富集分析棒棒糖图.pdf",width = 12,height = 8)
+go_combined %>%
+  mutate(x = -log10(p.adjust) * type,
+         margin = ifelse(type == 1, -0.2, 0.2),  # 设置文本偏移量
+         hjust = ifelse(type == 1, 1, 0)) %>%  # 设置文本对齐方式
+  arrange(x) %>%  # 按 x 值排序
+  mutate(Description = factor(Description, levels = Description)) %>%  # 设置 Description 为因子
+  ggplot(aes(x, Description, colour = ONTOLOGY)) +
+  geom_segment(aes(xend = 0, yend = Description), linewidth = 1.2, show.legend = FALSE) +  # 绘制线段
+  geom_point(aes(size = Count)) +  # 绘制点图
+  geom_text(aes(x = margin, label = Description, hjust = hjust), show.legend = FALSE, colour = "black") +  # 添加通路名称
+  geom_text(aes(x = margin, label = geneID, hjust = hjust, vjust = 2), show.legend = FALSE, colour = "black", size = 3) +  # 添加基因名
+  geom_hline(yintercept = 0) +  # 添加水平线
+  labs(x = '-log10(p.adjust)', y = NULL) +  # 设置坐标轴标签
+  scale_colour_manual(name = 'Correlation', values = c("MF" = "#E27371", "BP" = "#5D82A7", "CC" = "#486b98")) +  # 设置颜色
+  scale_x_continuous(labels = abs, limits = c(-19, 25)) +  # 设置 x 轴标签为绝对值
+  theme_classic() +  # 使用经典主题
+  theme(
+    axis.text.y = element_blank(),  # 去除 y 轴文本
+    axis.ticks.y = element_blank(),  # 去除 y 轴刻度
+    plot.margin = margin(t = 10, r = 10, b = 20, l = 20),  # 设置边距
+    panel.border = element_blank(),  # 去除边框
+    axis.line.x = element_line(color = "black")  # 设置 x 轴线
+  )
+dev.off()
+########GO可视化2#######
+result_BP<-go_result%>%filter(ONTOLOGY=='BP')
+result_CC<-go_result%>%filter(ONTOLOGY=='CC')
+result_MF<-go_result%>%filter(ONTOLOGY=='MF')
+#取前10行
+BP<-result_BP[1:5,]
+CC<-result_CC[1:5,]
+MF<-result_MF[1:5,]
+all<-rbind(BP,CC,MF)
+
+library(forcats)
+pdf(file = "GO富集分析柱状图.pdf",width = 12,height = 8)
+ggplot(all,aes(x=GeneRatio,y=fct_reorder(Description, GeneRatio)))+#将term顺序按照GeneRatio进行排序
+  #分面
+  geom_point(aes(size=Count,fill=p.adjust),
+             shape=21,
+             color='black')+
+  facet_grid(ONTOLOGY~.,
+             scale='free_y',
+             space = 'free_y'
+  )+
+  #修改气泡图颜色
+  scale_fill_gradient(low='#E27371',high = '#5D82A7')+
+  #标题修改
+  labs(title='GO Enrichment',
+       y='GO term',
+       x='GeneRatio')+
+  guides(fill=guide_colorbar(reverse = T,order=1))+
+  theme_bw()#主题
+dev.off()
+## KEGG富集 ####
+# 假设你已经有了 KEGG 富集分析的结果 `kk1_res`
+kk1 <- enrichKEGG(gene = genelist$ENTREZID,
+                  keyType = 'kegg',
+                  organism = 'hsa',
+                  pvalueCutoff = 0.1,
+                  qvalueCutoff = 0.1)
+kk1_res <- kk1@result
+kk1_res$LogP <- -log(kk1_res$p.adjust)  # 计算 -log10(p.adjust)
+
+# 提取前十条通路
+top10_kegg <- kk1_res[1:10, ]
+# 将 ENTREZID 转换为 SYMBOL  
+library(dplyr)  
+library(tidyr)  
+top10_kegg_expanded <- top10_kegg %>%  
+  separate_rows(geneID, sep = "/")  # 使用 separate_rows 拆分成多行  
+
+top10_kegg_with_symbols <- top10_kegg_expanded %>%  
+  left_join(genelist, by = c("geneID" = "ENTREZID")) %>%  
+  group_by(Description) %>%  
+  summarise(geneID = paste(na.omit(SYMBOL), collapse = "/")) %>%  
+  ungroup()  
+top10_kegg_final <- top10_kegg %>%  
+  left_join(top10_kegg_with_symbols, by = "Description")  
+colnames(top10_kegg_final)[13] <- "geneID"
+top10_kegg <- top10_kegg_final
+# 将 GeneRatio 转换为数值
+top10_kegg <- top10_kegg %>%
+  separate(GeneRatio, into = c("GR1", "GR2"), sep = "/") %>%
+  mutate(GeneRatio = as.numeric(GR1) / as.numeric(GR2))
+
+# 加载必要的库
+library(tidyverse)
+library(ggsankey)  # 用于绘制桑基图
+library(viridis)   # 用于颜色填充
+
+#label: sankey
+# 准备桑基图数据
+sankey_data <- top10_kegg %>%
+  top_n(10, -p.adjust) %>%  # 选择 p.adjust 最小的前5条通路
+  arrange(GeneRatio) %>%   # 按 GeneRatio 排序
+  ungroup() %>%
+  mutate(Description = str_wrap(Description, 30))  # 对通路名称进行换行处理
+
+# 生成桑基图数据
+sankey_plot_data <- sankey_data %>%
+  separate_rows(geneID, sep = "/") %>%  # 将 geneID 按 "/" 分隔成多行
+  dplyr::filter(geneID %in% sample(geneID, 30, replace = TRUE)) %>%  # 随机选择30个基因
+  make_long(geneID, Description) %>%  # 转换为桑基图数据格式
+  mutate(node = factor(node, levels = unique(node)))  # 将节点转换为因子
+
+# 绘制桑基图
+sankey_plot <- ggplot(sankey_plot_data, aes(x = x, next_x = next_x, node = node, 
+                                            next_node = next_node, fill = node)) +
+  geom_sankey(flow.alpha = 0.2, show.legend = FALSE) +  # 绘制桑基图
+  scale_fill_viridis_d() +  # 使用 viridis 调色板
+  theme_minimal() +  # 使用简约主题
+  theme(
+    panel.grid = element_blank(),  # 去除网格线
+    axis.text = element_blank(),   # 去除坐标轴文本
+    axis.title = element_blank()   # 去除坐标轴标题
+  )
+
+# 获取桑基图的第二图层数据
+obj <- ggplot_build(sankey_plot)$data[[2]]
+
+# 获取通路名称的坐标范围
+xmin <- max(obj$xmax)  # 桑基图右侧的坐标
+obj.path <- dplyr::filter(obj, x == 2)  # 过滤出通路名称部分
+ymin <- min(obj.path$ymin)  # 通路名称的最小 y 坐标
+ymax <- max(obj.path$ymax)  # 通路名称的最大 y 坐标
+
+#label: sankey_point
+# 调整参数
+hjust <- 0.05              # 文本标签的左偏移量
+vjust <- c(-0.12, 0.05)    # 点图上下对齐调整量
+plot_expand <- c(0.3, 1)   # 桑基图左右侧间距
+
+# 根据桑基图的通路名称获取点的高度，并绘制点图
+point_plot <- dplyr::filter(obj, n_x == 2) %>%
+  mutate(y = (ymin + ymax) / 2) %>%  # 计算点的 y 坐标
+  inner_join(sankey_data, by = c('node' = 'Description')) %>%  # 合并桑基图数据
+  ggplot() +
+  geom_point(aes(GeneRatio, y, size = Count, fill = LogP), shape = 21) +  # 绘制点图
+  scale_fill_gradientn(colours = c("#486b98", "#f5f2b1", "#b93735")) +  # 自定义颜色渐变
+  labs(y = NULL) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),  # 去除网格线
+    axis.text = element_text(size = 10),  # 调整坐标轴文本大小
+    axis.title = element_text(size = 16),  # 调整坐标轴标题大小
+    axis.text.y = element_blank(),  # 去除 y 轴文本
+    axis.ticks.y = element_blank()  # 去除 y 轴刻度
+  )
+# 合并桑基图和点图
+final_plot <- sankey_plot +
+  # 添加文本标签
+  geom_text(data = obj, aes(x - 0.05, y = (ymax + ymin) / 2, label = node), 
+            inherit.aes = FALSE, hjust = 1, lineheight = 0.7) +
+  # 调整桑基图的左右间距
+  scale_x_discrete(expand = expansion(mult = plot_expand)) +
+  # 添加点图
+  annotation_custom(ggplotGrob(point_plot),
+                    xmin = xmin, xmax = 3,
+                    ymin = ymin * (1 - vjust[1]), ymax = ymax * (1 + vjust[2]))
+
+final_plot
+ggsave(filename = "KEGG桑吉图.pdf",plot = final_plot)
+
+```
+
+```{r string数据库结果热图绘制 }
+setwd(string_result_folder )
+betweenness <- read.csv("Betweenness.csv")
+bottleneck <- read.csv("Bottleneck.csv")
+closeness <- read.csv("Closeness.csv")
+clustering_coefficient <- read.csv("ClusteringCoefficient.csv")
+degree <- read.csv("degree.csv")
+dmnc <- read.csv("DMNC.csv")
+eccentricity <- read.csv("Eccentricity.csv")
+epc <- read.csv("EPC.csv")
+mcc <- read.csv("MCC.csv")
+mnc <- read.csv("MNC.csv")
+radiality <- read.csv("Radiality.csv")
+stress <- read.csv("Stress.csv")
+
+all <- merge(betweenness, bottleneck, by = "Name", all = TRUE)
+all <- merge(all, closeness, by = "Name", all = TRUE)
+all <- merge(all, clustering_coefficient, by = "Name", all = TRUE)
+all <- merge(all, degree, by = "Name", all = TRUE)
+all <- merge(all, dmnc, by = "Name", all = TRUE)
+all <- merge(all, eccentricity, by = "Name", all = TRUE)
+all <- merge(all, epc, by = "Name", all = TRUE)
+all <- merge(all, mcc, by = "Name", all = TRUE)
+all <- merge(all, mnc, by = "Name", all = TRUE)
+all <- merge(all, radiality, by = "Name", all = TRUE)
+all <- merge(all, stress, by = "Name", all = TRUE)
+rownames(all) <- all[,1]
+all <- all[,-1]
+all <- log2(all+1)
+all <- t(all)
+library(ggplot2)
+library(reshape2)
+library(pheatmap)
+blue_white_red <- colorRampPalette(c("#39bbec", "white", "#f38466"))(50)
+# 绘制热图，并设置不同的颜色
+pdf(file = "string数据库热图.pdf",width = 12,height = 8)
+pheatmap(all,
+         cluster_cols = TRUE,
+         cluster_rows = TRUE,
+         show_colnames = TRUE,
+         show_rownames = TRUE,
+         border_color = NA,
+         color = blue_white_red) # 使用蓝色到白色到红色渐变
+dev.off()
+```
+#免疫浸润分析
+#仅对肿瘤样本进行分析
+```{r 保留肿瘤样本}
+# 删除临床数据中为正常的样本
+HCC_clinical_all<- HCC_clinical_all[HCC_clinical_all[,1]=="HCC", ]
+####让表达矩阵和临床信息样本顺序和个数对应起来
+samesample<- intersect(rownames(HCC_clinical_all),colnames(HCC_combat_matrix))
+#匹配并保留表达矩阵与 samesample_ICGC 相匹配的列
+HCC_combat_matrix <- HCC_combat_matrix[, match(samesample, colnames(HCC_combat_matrix))]
+```
+#ssGSEA
+```{r 前期准备}
+library(tidyverse)
+library(GSVA)
+setwd("C:/Users/86177/Desktop/我的课题/马兜铃相关/肝癌/免疫浸润和药物敏感性")
+load("cellMarker_ssGSEA.Rdata")
+
+expr <- as.matrix(HCC_combat_matrix)   #将expr转换为矩阵格式
+
+#免疫浸润分析
+gsva_data <- gsva(expr,
+                  cellMarker, 
+                  method = "ssgsea")
+
+gsva_data1 <- gsva_data %>% t() %>% as.data.frame()#得到分析结果，每个样本对应的免疫细胞打分
+
+```
+
+```{r ESR1}
+setwd("C:/Users/86177/Desktop/我的课题/马兜铃相关/肝癌/免疫浸润和药物敏感性")
+exp1 <- HCC_combat_matrix %>% t() %>% as.data.frame() %>% dplyr::select("ESR1")#选出一个基因
+exp1$group <- ifelse(exp1$ESR1 > median(exp1$ESR1), "high", "low")#根据中位数分为高低表达两组
+
+identical(rownames(exp1),rownames(gsva_data1))
+rt <- cbind(group=exp1$group,gsva_data1)#原始数据中保留那一个基因的数据
+###其余跑就完了，和之前学的IOBR算法是一样的
+x=colnames(rt)[1]
+colnames(rt)[1]="Type"
+library(reshape2)
+#把数据转换成gglpot2输入文件
+data=melt(rt,id.vars=c("Type"))
+colnames(data)=c("Type","Gene","Expression")
+data$Type <- factor(data$Type,levels =c("low","high"))
+library(ggpubr)
+#绘制boxplot
+p=ggboxplot(data, x="Gene", y="Expression", fill = "Type", 
+            ylab="Infiltration levels",
+            xlab="",
+            legend.title=x,
+            palette = c("#0072B5CC","red"),
+            add = "none")
+p=p+rotate_x_text(60)
+p1=p+stat_compare_means(aes(group=Type),
+                        method="wilcox.test", #自己调整
+                        symnum.args=list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", " ")),
+                        label = "p.signif")
+p1
+ggsave(filename = "ESR1_ssGSEA.pdf",plot = p1)
+```
+
+```{r CYP1A2}
+exp1 <- HCC_combat_matrix %>% t() %>% as.data.frame() %>% dplyr::select("CYP1A2")#选出一个基因
+exp1$group <- ifelse(exp1$CYP1A2 > median(exp1$CYP1A2), "high", "low")#根据中位数分为高低表达两组
+
+identical(rownames(exp1),rownames(gsva_data1))
+rt <- cbind(group=exp1$group,gsva_data1)#原始数据中保留那一个基因的数据
+###其余跑就完了，和之前学的IOBR算法是一样的
+x=colnames(rt)[1]
+colnames(rt)[1]="Type"
+library(reshape2)
+#把数据转换成gglpot2输入文件
+data=melt(rt,id.vars=c("Type"))
+colnames(data)=c("Type","Gene","Expression")
+data$Type <- factor(data$Type,levels =c("low","high"))
+library(ggpubr)
+#绘制boxplot
+p=ggboxplot(data, x="Gene", y="Expression", fill = "Type", 
+            ylab="Infiltration levels",
+            xlab="",
+            legend.title=x,
+            palette = c("#0072B5CC","red"),
+            add = "none")
+p=p+rotate_x_text(60)
+p1=p+stat_compare_means(aes(group=Type),
+                        method="wilcox.test", #自己调整
+                        symnum.args=list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", " ")),
+                        label = "p.signif")
+p1
+ggsave(filename = "CYP1A2_ssGSEA.pdf",plot = p1)
+```
+
+```{r AURKA}
+exp1 <- HCC_combat_matrix %>% t() %>% as.data.frame() %>% dplyr::select("AURKA")#选出一个基因
+exp1$group <- ifelse(exp1$AURKA > median(exp1$AURKA), "high", "low")#根据中位数分为高低表达两组
+
+identical(rownames(exp1),rownames(gsva_data1))
+rt <- cbind(group=exp1$group,gsva_data1)#原始数据中保留那一个基因的数据
+###其余跑就完了，和之前学的IOBR算法是一样的
+x=colnames(rt)[1]
+colnames(rt)[1]="Type"
+library(reshape2)
+#把数据转换成gglpot2输入文件
+data=melt(rt,id.vars=c("Type"))
+colnames(data)=c("Type","Gene","Expression")
+data$Type <- factor(data$Type,levels =c("low","high"))
+library(ggpubr)
+#绘制boxplot
+p=ggboxplot(data, x="Gene", y="Expression", fill = "Type", 
+            ylab="Infiltration levels",
+            xlab="",
+            legend.title=x,
+            palette = c("#0072B5CC","red"),
+            add = "none")
+p=p+rotate_x_text(60)
+p1=p+stat_compare_means(aes(group=Type),
+                        method="wilcox.test", #自己调整
+                        symnum.args=list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", " ")),
+                        label = "p.signif")
+p1
+ggsave(filename = "AURKA_ssGSEA.pdf",plot = p1)
+```
+#estimate
+
+```{r 分析前准备}
+library(tidyverse)
+library(IOBR)
+estimate <- deconvo_tme(eset = HCC_combat_matrix, method = "estimate")
+
+head(estimate)#展示结果每个样本对应的所有免疫细胞的分析结果
+
+write_tsv(estimate, "estimate.txt")#保存结果
+
+```
+
+```{r ESR1}
+# 多组箱式图
+cibe1 <- estimate %>% column_to_rownames("ID")%>% select(c(1:4))#把后三列清洗掉了，并且把样本变为行名
+IMGRPD <- HCC_combat_matrix %>% t() %>% as.data.frame() %>% select("ESR1")#挑选CD274基因对应的所有样本数据
+IMGRPD$group <- ifelse(IMGRPD$ESR1 > median(IMGRPD$ESR1), "high", "low")#根据CD274基因表达量的中位数进行高低分组
+
+identical(rownames(IMGRPD),rownames(cibe1))
+rt <- cbind(group=IMGRPD$group,cibe1)#将分组结果和免疫浸润结果进行一个整合，研究CD274基因对免疫浸润结果的影响
+###下列这些代码都是一致的，直接跑就行
+x=colnames(rt)[1]
+colnames(rt)[1]="Type"
+library(reshape2)
+#把数据转换成gglpot2输入文件---转换成了长数据的格式
+data=melt(rt,id.vars=c("Type"))
+colnames(data)=c("Type","Gene","Expression")
+data$Type <- factor(data$Type,levels =c("low","high"))
+library(ggpubr)
+#绘制所有免疫浸润结果的boxplot
+p=ggboxplot(data, x="Gene", y="Expression", fill = "Type", 
+            ylab="Infiltration levels",#浸润的分布
+            xlab="",
+            legend.title=x,
+            palette = c("#0072B5CC","#E18727CC"),
+            add = "none")
+p=p+rotate_x_text(60)
+p1=p+stat_compare_means(aes(group=Type),
+                        method="wilcox.test", #这里的检验方法可以自己调整，这里是秩和检验，如果想改成T检验就是t.test
+                        symnum.args=list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", " ")),
+                        label = "p.signif")
+p1#查看结果图片
+ggsave(filename = "ESR1_estimate.pdf",plot = p1)
+```
+
+```{r CYP1A2}
+# 多组箱式图
+cibe1 <- estimate %>% column_to_rownames("ID")%>% select(c(1:4))#把后三列清洗掉了，并且把样本变为行名
+IMGRPD <- HCC_combat_matrix %>% t() %>% as.data.frame() %>% select("CYP1A2")#挑选CD274基因对应的所有样本数据
+IMGRPD$group <- ifelse(IMGRPD$CYP1A2 > median(IMGRPD$CYP1A2), "high", "low")#根据CD274基因表达量的中位数进行高低分组
+
+identical(rownames(IMGRPD),rownames(cibe1))
+rt <- cbind(group=IMGRPD$group,cibe1)#将分组结果和免疫浸润结果进行一个整合，研究CD274基因对免疫浸润结果的影响
+###下列这些代码都是一致的，直接跑就行
+x=colnames(rt)[1]
+colnames(rt)[1]="Type"
+library(reshape2)
+#把数据转换成gglpot2输入文件---转换成了长数据的格式
+data=melt(rt,id.vars=c("Type"))
+colnames(data)=c("Type","Gene","Expression")
+data$Type <- factor(data$Type,levels =c("low","high"))
+library(ggpubr)
+#绘制所有免疫浸润结果的boxplot
+p=ggboxplot(data, x="Gene", y="Expression", fill = "Type", 
+            ylab="Infiltration levels",#浸润的分布
+            xlab="",
+            legend.title=x,
+            palette = c("#0072B5CC","#E18727CC"),
+            add = "none")
+p=p+rotate_x_text(60)
+p1=p+stat_compare_means(aes(group=Type),
+                        method="wilcox.test", #这里的检验方法可以自己调整，这里是秩和检验，如果想改成T检验就是t.test
+                        symnum.args=list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", " ")),
+                        label = "p.signif")
+p1#查看结果图片
+ggsave(filename = "CYP1A2_estimate.pdf",plot = p1)
+```
+
+```{r AURKA}
+# 多组箱式图
+cibe1 <- estimate %>% column_to_rownames("ID")%>% select(c(1:4))#把后三列清洗掉了，并且把样本变为行名
+IMGRPD <- HCC_combat_matrix %>% t() %>% as.data.frame() %>% select("AURKA")#挑选CD274基因对应的所有样本数据
+IMGRPD$group <- ifelse(IMGRPD$AURKA > median(IMGRPD$AURKA), "high", "low")#根据CD274基因表达量的中位数进行高低分组
+
+identical(rownames(IMGRPD),rownames(cibe1))
+rt <- cbind(group=IMGRPD$group,cibe1)#将分组结果和免疫浸润结果进行一个整合，研究CD274基因对免疫浸润结果的影响
+###下列这些代码都是一致的，直接跑就行
+x=colnames(rt)[1]
+colnames(rt)[1]="Type"
+library(reshape2)
+#把数据转换成gglpot2输入文件---转换成了长数据的格式
+data=melt(rt,id.vars=c("Type"))
+colnames(data)=c("Type","Gene","Expression")
+data$Type <- factor(data$Type,levels =c("low","high"))
+library(ggpubr)
+#绘制所有免疫浸润结果的boxplot
+p=ggboxplot(data, x="Gene", y="Expression", fill = "Type", 
+            ylab="Infiltration levels",#浸润的分布
+            xlab="",
+            legend.title=x,
+            palette = c("#0072B5CC","#E18727CC"),
+            add = "none")
+p=p+rotate_x_text(60)
+p1=p+stat_compare_means(aes(group=Type),
+                        method="wilcox.test", #这里的检验方法可以自己调整，这里是秩和检验，如果想改成T检验就是t.test
+                        symnum.args=list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", " ")),
+                        label = "p.signif")
+p1#查看结果图片
+ggsave(filename = "AURKA_estimate.pdf",plot = p1)
+```
+
+```{r ESR1 药物敏感性分析}
+#这里的分析仅仅针对肿瘤样本，所以在运行下面代码之前先运行一下上面的肿瘤样本提取
+library(limma)
+library(oncoPredict)
+library(parallel)
+library(limma)
+library(ggplot2)
+library(ggpubr)
+library(limma)
+library(reshape2)
+library(ggplot2)
+library(ggpubr)
+#随机数种子
+set.seed(999)
+data <- HCC_combat_matrix
+#转化为matrix
+dimnames=list(rownames(data), colnames(data))
+data=matrix(as.numeric(as.matrix(data)), nrow=nrow(data), dimnames=dimnames)
+#读取药物敏感性文件
+GDSC2_Expr=readRDS(file='GDSC2_Expr.rds')
+GDSC2_Res=readRDS(file = 'GDSC2_Res.rds')
+GDSC2_Res=exp(GDSC2_Res) 
+
+#药物敏感性,半小时左右---完成后会得到一个药敏文件
+calcPhenotype(trainingExprData = GDSC2_Expr,    #训练组的表达数据
+              trainingPtype = GDSC2_Res,        #训练组的药物数据
+              testExprData = data,              #测试组的表达方法
+              batchCorrect = 'eb',              #批次矫正的方法
+              powerTransformPhenotype = TRUE,
+              removeLowVaryingGenes = 0.2,      #去除波动小的基因
+              minNumSamples = 10,               #最小的样品数目
+              printOutput = TRUE,               #是否输出结果
+              removeLowVaringGenesFrom = 'rawData')
+
+#再读入刚刚得到的药敏文件，进行数据整理
+senstivity=read.csv("calcPhenotype_Output/DrugPredictions.csv", header=T, sep=",", check.names=F, row.names=1)
+
+#风险文件
+HCC <- HCC_combat_matrix
+HCC <- t(HCC)
+HCC <- as.data.frame(HCC)
+HCC$risk <- ifelse(HCC$ESR1 > median(HCC$ESR1), "high", "low") #根据dat的中位数分为high和low两组
+risk=HCC
+
+#合并
+sameSample=intersect(row.names(risk), row.names(senstivity))#获取共有样本
+risk=risk[sameSample, "risk",drop=F]
+senstivity=senstivity[sameSample,,drop=F]
+senstivity[is.na(senstivity)] = 0#把数据里面na的值转化为0
+senstivity = log2(senstivity+1)#标准化，取log
+rt=cbind(risk, senstivity)#合并起来
+
+#设置比较组
+rt$risk=factor(rt$risk, levels=c("low", "high"))
+type=levels(factor(rt[,"risk"]))
+comp=combn(type, 2)
+my_comparisons=list()
+for(i in 1:ncol(comp)){my_comparisons[[i]]<-comp[,i]}
+
+#提取显著差异的药物
+sigGene=c()
+for(i in colnames(rt)[2:(ncol(rt))]){
+  if(sd(rt[,i])<0.05){next}
+  wilcoxTest=wilcox.test(rt[,i] ~ rt[,"risk"])
+  pvalue=wilcoxTest$p.value
+  if(wilcoxTest$p.value<0.001){#结果好P值就设置为0.001，结果差P就设置为0.05
+    sigGene=c(sigGene, i)
+  }
+}
+sigGene=c(sigGene, "risk")
+rt=rt[,sigGene]
+
+#把数据转换成ggplot2输入文件
+rt=melt(rt,id.vars=c("risk"))
+colnames(rt)=c("risk","Gene","Expression")
+
+#设置比较组
+group=levels(factor(rt$risk))
+rt$risk=factor(rt$risk, levels=c("low","high"))
+comp=combn(group,2)
+my_comparisons=list()
+for(j in 1:ncol(comp)){my_comparisons[[j]]<-comp[,j]}
+setwd("C:/Users/86177/Desktop/我的课题/马兜铃相关/肝癌/免疫浸润和药物敏感性")
+#绘制箱线图
+boxplot = ggboxplot(rt, x = "Gene", y = "Expression", fill = "risk",
+                    xlab = "",
+                    ylab = "Drug Sensitivity",
+                    legend.title = "Risk",
+                    width = 0.8,
+                    palette = c("DodgerBlue1", "Firebrick2")) +
+  rotate_x_text(50) +
+  stat_compare_means(aes(group = risk),
+                     method = "wilcox.test",
+                     symnum.args = list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), 
+                                        symbols = c("***", "**", "*", "ns")), 
+                     label = "p.signif") +
+  theme(axis.text = element_text(face = "bold.italic", colour = "#441718", size = 8),  # 缩小坐标轴刻度标签大小
+        axis.title = element_text(face = "bold.italic", colour = "#441718", size = 8),  # 缩小坐标轴标题大小
+        axis.line = element_blank(),
+        plot.title = element_text(face = "bold.italic", colour = "#441718", size = 8),  # 缩小图表标题大小
+        legend.text = element_text(face = "bold.italic", size = 8),  # 缩小图例文字大小
+        legend.title = element_text(face = "bold.italic", size = 8),  # 缩小图例标题大小
+        panel.border = element_rect(fill = NA, color = "#35A79D", size = 1.5, linetype = "solid"),
+        panel.background = element_rect(fill = "#F1F6FC"),
+        panel.grid.major = element_line(color = "#CFD3D6", size = 0.5, linetype = "dotdash")
+  )
+
+#输出图片
+pdf(file="ESR1_drugSenstivity.pdf", width=25, height=10)#这里可以修改图片的高和宽
+print(boxplot)
+dev.off()
+
+```
+
+```{r CYP1A2 药物敏感性分析}
+HCC <- HCC_combat_matrix
+HCC <- t(HCC)
+HCC <- as.data.frame(HCC)
+HCC$risk <- ifelse(HCC$CYP1A2 > median(HCC$CYP1A2), "high", "low") #根据dat的中位数分为high和low两组
+risk=HCC
+
+#合并
+sameSample=intersect(row.names(risk), row.names(senstivity))#获取共有样本
+risk=risk[sameSample, "risk",drop=F]
+senstivity=senstivity[sameSample,,drop=F]
+senstivity[is.na(senstivity)] = 0#把数据里面na的值转化为0
+senstivity = log2(senstivity+1)#标准化，取log
+rt=cbind(risk, senstivity)#合并起来
+
+#设置比较组
+rt$risk=factor(rt$risk, levels=c("low", "high"))
+type=levels(factor(rt[,"risk"]))
+comp=combn(type, 2)
+my_comparisons=list()
+for(i in 1:ncol(comp)){my_comparisons[[i]]<-comp[,i]}
+
+#提取显著差异的药物
+sigGene=c()
+for(i in colnames(rt)[2:(ncol(rt))]){
+  if(sd(rt[,i])<0.05){next}
+  wilcoxTest=wilcox.test(rt[,i] ~ rt[,"risk"])
+  pvalue=wilcoxTest$p.value
+  if(wilcoxTest$p.value<0.001){#结果好P值就设置为0.001，结果差P就设置为0.05
+    sigGene=c(sigGene, i)
+  }
+}
+sigGene=c(sigGene, "risk")
+rt=rt[,sigGene]
+
+#把数据转换成ggplot2输入文件
+rt=melt(rt,id.vars=c("risk"))
+colnames(rt)=c("risk","Gene","Expression")
+
+#设置比较组
+group=levels(factor(rt$risk))
+rt$risk=factor(rt$risk, levels=c("low","high"))
+comp=combn(group,2)
+my_comparisons=list()
+for(j in 1:ncol(comp)){my_comparisons[[j]]<-comp[,j]}
+setwd("C:/Users/86177/Desktop/我的课题/马兜铃相关/肝癌/免疫浸润和药物敏感性")
+#绘制箱线图
+boxplot = ggboxplot(rt, x = "Gene", y = "Expression", fill = "risk",
+                    xlab = "",
+                    ylab = "Drug Sensitivity",
+                    legend.title = "Risk",
+                    width = 0.8,
+                    palette = c("DodgerBlue1", "Firebrick2")) +
+  rotate_x_text(50) +
+  stat_compare_means(aes(group = risk),
+                     method = "wilcox.test",
+                     symnum.args = list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), 
+                                        symbols = c("***", "**", "*", "ns")), 
+                     label = "p.signif") +
+  theme(axis.text = element_text(face = "bold.italic", colour = "#441718", size = 8),  # 缩小坐标轴刻度标签大小
+        axis.title = element_text(face = "bold.italic", colour = "#441718", size = 8),  # 缩小坐标轴标题大小
+        axis.line = element_blank(),
+        plot.title = element_text(face = "bold.italic", colour = "#441718", size = 8),  # 缩小图表标题大小
+        legend.text = element_text(face = "bold.italic", size = 8),  # 缩小图例文字大小
+        legend.title = element_text(face = "bold.italic", size = 8),  # 缩小图例标题大小
+        panel.border = element_rect(fill = NA, color = "#35A79D", size = 1.5, linetype = "solid"),
+        panel.background = element_rect(fill = "#F1F6FC"),
+        panel.grid.major = element_line(color = "#CFD3D6", size = 0.5, linetype = "dotdash")
+  )
+
+#输出图片
+pdf(file="CYP1A2_drugSenstivity.pdf", width=25, height=10)#这里可以修改图片的高和宽
+print(boxplot)
+dev.off()
+```
+
+```{r AURKA 药物敏感性分析}
+HCC <- HCC_combat_matrix
+HCC <- t(HCC)
+HCC <- as.data.frame(HCC)
+HCC$risk <- ifelse(HCC$AURKA > median(HCC$AURKA), "high", "low") #根据dat的中位数分为high和low两组
+risk=HCC
+
+#合并
+sameSample=intersect(row.names(risk), row.names(senstivity))#获取共有样本
+risk=risk[sameSample, "risk",drop=F]
+senstivity=senstivity[sameSample,,drop=F]
+senstivity[is.na(senstivity)] = 0#把数据里面na的值转化为0
+senstivity = log2(senstivity+1)#标准化，取log
+rt=cbind(risk, senstivity)#合并起来
+
+#设置比较组
+rt$risk=factor(rt$risk, levels=c("low", "high"))
+type=levels(factor(rt[,"risk"]))
+comp=combn(type, 2)
+my_comparisons=list()
+for(i in 1:ncol(comp)){my_comparisons[[i]]<-comp[,i]}
+
+#提取显著差异的药物
+sigGene=c()
+for(i in colnames(rt)[2:(ncol(rt))]){
+  if(sd(rt[,i])<0.05){next}
+  wilcoxTest=wilcox.test(rt[,i] ~ rt[,"risk"])
+  pvalue=wilcoxTest$p.value
+  if(wilcoxTest$p.value<0.001){#结果好P值就设置为0.001，结果差P就设置为0.05
+    sigGene=c(sigGene, i)
+  }
+}
+sigGene=c(sigGene, "risk")
+rt=rt[,sigGene]
+
+#把数据转换成ggplot2输入文件
+rt=melt(rt,id.vars=c("risk"))
+colnames(rt)=c("risk","Gene","Expression")
+
+#设置比较组
+group=levels(factor(rt$risk))
+rt$risk=factor(rt$risk, levels=c("low","high"))
+comp=combn(group,2)
+my_comparisons=list()
+for(j in 1:ncol(comp)){my_comparisons[[j]]<-comp[,j]}
+setwd("C:/Users/86177/Desktop/我的课题/马兜铃相关/肝癌/免疫浸润和药物敏感性")
+#绘制箱线图
+boxplot = ggboxplot(rt, x = "Gene", y = "Expression", fill = "risk",
+                    xlab = "",
+                    ylab = "Drug Sensitivity",
+                    legend.title = "Risk",
+                    width = 0.8,
+                    palette = c("DodgerBlue1", "Firebrick2")) +
+  rotate_x_text(50) +
+  stat_compare_means(aes(group = risk),
+                     method = "wilcox.test",
+                     symnum.args = list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), 
+                                        symbols = c("***", "**", "*", "ns")), 
+                     label = "p.signif") +
+  theme(axis.text = element_text(face = "bold.italic", colour = "#441718", size = 8),  # 缩小坐标轴刻度标签大小
+        axis.title = element_text(face = "bold.italic", colour = "#441718", size = 8),  # 缩小坐标轴标题大小
+        axis.line = element_blank(),
+        plot.title = element_text(face = "bold.italic", colour = "#441718", size = 8),  # 缩小图表标题大小
+        legend.text = element_text(face = "bold.italic", size = 8),  # 缩小图例文字大小
+        legend.title = element_text(face = "bold.italic", size = 8),  # 缩小图例标题大小
+        panel.border = element_rect(fill = NA, color = "#35A79D", size = 1.5, linetype = "solid"),
+        panel.background = element_rect(fill = "#F1F6FC"),
+        panel.grid.major = element_line(color = "#CFD3D6", size = 0.5, linetype = "dotdash")
+  )
+
+#输出图片
+pdf(file="AURKA_drugSenstivity.pdf", width=20, height=8)#这里可以修改图片的高和宽
+print(boxplot)
+dev.off()
+```
+
+```{r 分子对接柱状图绘制}
+library(ggplot2)
+library(TheBestColors)
+
+# 获取前9个最佳颜色
+a <- Best100(28)[1:9]
+
+# 绘制柱状图并保存为PDF文件
+pdf(file = "分子对接柱状图.pdf", width = 10, height = 6)
+ggplot(all, aes(x = reorder(gene, energy), y = energy, fill = gene)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = a) + # 手动设置颜色
+  labs(title = "基因与结合能量关系图", x = "基因", y = "结合能量 (kcal/mol)") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12), # 旋转x轴标签并增加字体大小
+    axis.text.y = element_text(size = 12), # 增加y轴标签字体大小
+    axis.title.x = element_text(size = 14), # 增加x轴标题字体大小
+    axis.title.y = element_text(size = 14), # 增加y轴标题字体大小
+    panel.grid.major = element_line(color = "lightgrey"), # 添加主要网格线
+    panel.grid.minor = element_blank(), # 去掉次要网格线
+    axis.line = element_line(colour = "black"), # 添加轴线
+    legend.position = "bottom" # 将图例放在底部
+  ) +
+  geom_text(aes(label = round(energy, 2)), vjust = -0.5, size = 4, color = "black") # 添加数据标签
+dev.off()
+```
+
